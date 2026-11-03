@@ -1,2 +1,87 @@
-// Pipeline trigger test
-// Pipeline trigger test
+pipeline {
+    agent any
+
+    environment {
+        TOMCAT_URL = 'http://127.0.0.1:8081'
+        APP_CONTEXT = '/calculator'
+    }
+
+    options {
+        disableConcurrentBuilds()
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Build') {
+            steps {
+                sh 'mvn -B clean package'
+            }
+        }
+
+        stage('Test') {
+            steps {
+                junit testResults: 'target/surefire-reports/*.xml',
+                      allowEmptyResults: true
+            }
+        }
+
+        stage('Archive WAR') {
+            steps {
+                archiveArtifacts artifacts: 'target/calculator.war',
+                                 fingerprint: true
+            }
+        }
+
+        stage('Deploy to Tomcat') {
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'tomcat-creds',
+                        usernameVariable: 'TOMCAT_USERNAME',
+                        passwordVariable: 'TOMCAT_PASSWORD'
+                    )
+                ]) {
+                    sh '''
+                        curl --fail --silent --show-error \
+                        --user "$TOMCAT_USERNAME:$TOMCAT_PASSWORD" \
+                        --upload-file target/calculator.war \
+                        "$TOMCAT_URL/manager/text/deploy?path=$APP_CONTEXT&update=true"
+                    '''
+                }
+            }
+        }
+
+        stage('Verify Deployment') {
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'tomcat-creds',
+                        usernameVariable: 'TOMCAT_USERNAME',
+                        passwordVariable: 'TOMCAT_PASSWORD'
+                    )
+                ]) {
+                    sh '''
+                        curl --fail --silent --show-error \
+                        --user "$TOMCAT_USERNAME:$TOMCAT_PASSWORD" \
+                        "$TOMCAT_URL/manager/text/list" \
+                        | grep -F "$APP_CONTEXT:running:"
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'Calculator application deployed successfully!'
+        }
+        failure {
+            echo 'Pipeline failed. Please check the console output.'
+        }
+    }
+}
